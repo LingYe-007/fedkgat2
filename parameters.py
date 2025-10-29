@@ -516,7 +516,7 @@ def set_environ():
     # os.environ['CUDA_VISIBLE_DEVICES'] = '0,1,2,3'
     # 如果运行环境（例如你的服务器或本地计算机）所在的网络环境无法直接访问外网（例如因为防火墙或网络限制），配置代理可以绕过这些限制，使程序可以访问外部服务。
     # os.environ['all_proxy'] = 'http://202.114.7.49:7890'
-    os.environ['WANDB_MODE'] = 'online'
+    os.environ['SWANLAB_MODE'] = 'cloud'
 
 def experiment_paramenter(conf):
     if conf.data == 'music':
@@ -548,7 +548,7 @@ def debug_parameter(conf):
 
     # conf.data = 'book'
     if debug==True:
-        os.environ['WANDB_MODE'] = 'offline'
+        os.environ['SWANLAB_MODE'] = 'local'
         conf.n_participated = 4
         conf.workers = 4
         conf.validation_interval = 1
@@ -560,6 +560,7 @@ def debug_parameter(conf):
         conf.topk_eval_interval =30
     conf.train_fast = True
     conf.backend = "gloo"
+    print(f"Using backend: {conf.backend}")
 
     conf.n_comm_rounds = 2000*32
     conf.aggregator = "sum"

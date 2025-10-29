@@ -1,5 +1,6 @@
 import warnings
 from collections import defaultdict
+from datetime import timedelta
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -29,13 +30,43 @@ def init_process(rank, size, fn, conf):
     # init the distributed world.
     try:
         # 设置 MASTER_ADDR 和 MASTER_PORT 环境变量，指定主节点的地址和端口
-        os.environ['MASTER_ADDR'] = '127.0.0.1'
+        import socket
+        # 获取宿主机IP而不是容器内部IP
+        try:
+            # 尝试连接到外部地址来获取真实IP
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+        except:
+            local_ip = '127.0.0.1'
+        
+        os.environ['MASTER_ADDR'] = local_ip
         os.environ['MASTER_PORT'] = conf.port
+        print(f"Using MASTER_ADDR: {local_ip}, MASTER_PORT: {conf.port}")
+        
+        # 添加超时设置，避免长时间等待
+        os.environ['NCCL_TIMEOUT'] = '1800'  # 30分钟超时
+        os.environ['GLOO_TIMEOUT'] = '1800'  # 30分钟超时
+        
         # 初始化分布式进程组，使用指定的后端（如 gloo 或 nccl）
-        dist.init_process_group(conf.backend, rank=rank, world_size=size)
+        dist.init_process_group(conf.backend, rank=rank, world_size=size, timeout=timedelta(seconds=1800))
     except AttributeError as e:
         print(f"failed to init the distributed world: {e}.")
         conf.distributed = False
+    except Exception as e:
+        print(f"Failed to initialize process group for rank {rank}: {e}")
+        # 如果是网络连接问题，尝试使用不同的后端
+        if "Connection" in str(e) or "timeout" in str(e).lower():
+            print(f"Trying to fallback to gloo backend for rank {rank}")
+            try:
+                dist.init_process_group("gloo", rank=rank, world_size=size, timeout=timedelta(seconds=1800))
+                conf.backend = "gloo"
+            except Exception as e2:
+                print(f"Fallback also failed for rank {rank}: {e2}")
+                conf.distributed = False
+        else:
+            raise e
     try:
         # 忽略 UserWarning 警告，避免干扰输出
         warnings.filterwarnings("ignore", category=UserWarning)
@@ -75,6 +106,7 @@ def run_mpi():
 
 def run_gloo():
     '''启动多个进程'''
+    import time
     processes = [] #用于存储所有进程对象
     for rank in range(size): # 迭代根据大小（`size`）来启动进程
         # 每个进程都会执行 init_process 函数，init_process 是你自己定义的函数，它会在每个进程中被调用。args 是传递给 init_process 函数的参数
@@ -84,6 +116,9 @@ def run_gloo():
         p = mp.Process(target=init_process, args=(rank, size, run, conf)) # 为每个进程创建一个 Process 实例
         p.start() # 启动进程
         processes.append(p)
+        # 添加延迟，避免同时启动导致网络冲突
+        if rank > 0:
+            time.sleep(0.5)  # 每个进程延迟0.5秒启动
     for p in processes: # 等待所有进程执行完毕
         p.join() # 等待每个进程完成
 

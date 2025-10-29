@@ -7,7 +7,7 @@ from typing import List
 import numpy as np
 import torch
 import torch.distributed as dist
-import wandb
+import swanlab
 
 import pcode.create_aggregator as create_aggregator
 import pcode.create_coordinator as create_coordinator
@@ -20,13 +20,13 @@ from pcode.utils.auto_distributed import gather_objects, scatter_objects
 from pcode.utils.early_stopping import EarlyStoppingTracker
 from pcode.utils.tensor_buffer import TensorBuffer
 from pcode.utils.topk_eval import TopkEval
-from wandb_utils import init_wandb
+from swanlab_utils import init_swanlab
 
 
 class Master(object):
     def __init__(self, conf):
         # 结果可视化
-        init_wandb(conf, 'graph_recommendation', conf.experiment,
+        init_swanlab(conf, 'graph_recommendation', conf.experiment,
                    {"loss": "min", "accuracy": "max", "auc": "max", "precision": "max", "recall": "max", "ndcg": "max"},
                    "comm_round")
 

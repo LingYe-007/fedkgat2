@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import wandb
+import swanlab
 
 import pcode.utils.stat_tracker as stat_tracker
 
@@ -24,7 +24,7 @@ class Coordinator(object):
     def update_perf(self, performance):
         for name, perf in performance.items():
             self.best_trackers[name].update(perf, self.conf.graph.comm_round)
-            wandb.log({name: perf, 'comm_round': self.conf.graph.comm_round})
+            swanlab.log({name: perf, 'comm_round': self.conf.graph.comm_round})
 
     def __call__(self):
         return dict(

@@ -1,0 +1,3 @@
+2025-10-29 13:04:08	Worker-2 initialized the local training data with Master.
+2025-10-29 13:04:09	Worker-2 initialized dataset/criterion.
+

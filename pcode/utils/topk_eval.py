@@ -2,7 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import wandb
+import swanlab
 from torch.utils.data import DataLoader
 class TopkEval():
     # 这段代码实现了一个 Top-K 推荐评估 类 TopkEval，用于计算基于 精度 (Precision)、召回率 (Recall) 和 归一化折损累计增益 (NDCG) 的模型评估指标。
@@ -117,9 +117,9 @@ class TopkEval():
 
         model.to(origin_decive)
 
-        # 使用 wandb.log() 将每个 k 值下的 精度 (Precision@k)、召回率 (Recall@k) 和 NDCG@k 记录到 Weights and Biases（wandb）平台上
+        # 使用 swanlab.log() 将每个 k 值下的 精度 (Precision@k)、召回率 (Recall@k) 和 NDCG@k 记录到 SwanLab 平台上
         for i, k in enumerate(self.k_list):
-            wandb.log({f"precision@{k}": precision[i], f"recall@{k}": recall[i], f"ndcg@{k}": ndcg[i],'comm_round': comm_round})
+            swanlab.log({f"precision@{k}": precision[i], f"recall@{k}": recall[i], f"ndcg@{k}": ndcg[i],'comm_round': comm_round})
         return [precision, recall, ndcg]
 
     def get_user_record(self, data):
