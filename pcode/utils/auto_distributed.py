@@ -171,15 +171,23 @@ def gather_objects(objects_list: object = None, dst: int = 0):
     return output_list
 
 def scatter_objects(scatter_list: List[object] = None, src: int = 0):
-    output_list = [None] #初始化输出列表
-    # 设置分发对象列表
+    """Scatter Python objects from the source rank to all ranks."""
+    world_size = dist.get_world_size()
+
     if dist.get_rank() == src:
-        # 如果当前节点是源节点
-        object_list = [None] + scatter_list
+        if scatter_list is None:
+            raise ValueError("scatter_list must be provided on the source rank.")
+        if len(scatter_list) != world_size - 1:
+            raise ValueError(
+                f"scatter_list expects {world_size - 1} elements, got {len(scatter_list)}."
+            )
+
+        object_list = [None] + list(scatter_list)
+        output_list = [None] * world_size
     else:
-        object_list = [None] * dist.get_world_size()
-    # PyTorch 分布式通信库中的 dist.scatter_object_list
-    # 用于在分布式训练中将一组 Python 对象从指定的源节点（src）分发到所有参与的节点。每个目标节点接收到一个对应的对象。
+        object_list = None
+        output_list = [None]
+
     dist.scatter_object_list(output_list, object_list, src)
     return output_list
 

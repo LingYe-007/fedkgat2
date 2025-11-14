@@ -1,14 +1,17 @@
 from pathlib import Path
+import json
 
 import numpy as np
 import torch
 import swanlab
 from torch.utils.data import DataLoader
+
+
 class TopkEval():
     # 这段代码实现了一个 Top-K 推荐评估 类 TopkEval，用于计算基于 精度 (Precision)、召回率 (Recall) 和 归一化折损累计增益 (NDCG) 的模型评估指标。
     # 该类支持使用不同的 k 值（例如 k=20）进行评估，并且可以选择按项进行测试或按用户进行测试。
     # 代码中使用了 PyTorch 和 DataLoader 进行批量计算。
-    def __init__(self, dataset, train_data, test_data, k_list=[20]):
+    def __init__(self, dataset, train_data, test_data, k_list=[20], logger=None):
         topk_eval=Path(f"data/{dataset}/{dataset}.topk_eval")
         if topk_eval.exists():
             obj = torch.load(topk_eval)
@@ -53,6 +56,7 @@ class TopkEval():
                 self.user_list))])
             torch.save(self, topk_eval)
         self.k_list = k_list
+        self.logger = logger
 
     def eval(self, model, comm_round,device='cuda',batch_size=None, test_by_item=False):
         '''方法用于评估给定模型的性能，计算 Precision、Recall 和 NDCG 指标'''
@@ -117,9 +121,33 @@ class TopkEval():
 
         model.to(origin_decive)
 
-        # 使用 swanlab.log() 将每个 k 值下的 精度 (Precision@k)、召回率 (Recall@k) 和 NDCG@k 记录到 SwanLab 平台上
+        metrics_payload = {}
         for i, k in enumerate(self.k_list):
-            swanlab.log({f"precision@{k}": precision[i], f"recall@{k}": recall[i], f"ndcg@{k}": ndcg[i],'comm_round': comm_round})
+            precision_val = precision[i].detach() if hasattr(precision[i], "detach") else precision[i]
+            recall_val = recall[i].detach() if hasattr(recall[i], "detach") else recall[i]
+            ndcg_val = ndcg[i].detach() if hasattr(ndcg[i], "detach") else ndcg[i]
+
+            metrics_payload[f"precision@{k}"] = (
+                precision_val.item() if hasattr(precision_val, "item") else float(precision_val)
+            )
+            metrics_payload[f"recall@{k}"] = (
+                recall_val.item() if hasattr(recall_val, "item") else float(recall_val)
+            )
+            metrics_payload[f"ndcg@{k}"] = (
+                ndcg_val.item() if hasattr(ndcg_val, "item") else float(ndcg_val)
+            )
+
+        if metrics_payload:
+            step = int(comm_round)
+            swanlab.log(metrics_payload, step=step)
+            if self.logger is not None:
+                try:
+                    metrics_str = json.dumps(metrics_payload, ensure_ascii=False)
+                except (TypeError, ValueError):
+                    metrics_str = str(metrics_payload)
+                self.logger.log(
+                    f"[SwanLab] comm_round={step} topk metrics -> {metrics_str}"
+                )
         return [precision, recall, ndcg]
 
     def get_user_record(self, data):

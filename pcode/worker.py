@@ -13,7 +13,7 @@ import pcode.create_model as create_model
 import pcode.datasets.mixup_data as mixup
 import pcode.local_training.compressor as compressor
 import pcode.local_training.random_reinit as random_reinit
-from pcode.utils.auto_distributed import gather_objects, scatter_objects
+from pcode.utils.auto_distributed import scatter_objects, send_list
 from pcode.utils.tensor_buffer import TensorBuffer
 from pcode.utils.timer import Timer
 
@@ -165,6 +165,10 @@ class Worker(object):
             if self.conf.logger.meet_cache_limit():
                 self.conf.logger.save_json()
             self.model.to("cpu")
+            # 清理GPU显存，避免显存累积导致OOM
+            if self.conf.graph.on_cuda:
+                torch.cuda.empty_cache()
+                gc.collect()
 
     def print_gpu_tensor(self):
         i = 0
@@ -249,25 +253,41 @@ class Worker(object):
         return model
 
     def _send_model_to_master(self):
-        # dist.monitored_barrier()
-        comm_device='cpu'
         if self.conf.graph.client_id != -1:
-            gather_dict = {}
-            # flatten_model = TensorBuffer(list(self.model.state_dict().values()))
-            gather_dict['model_grad']=[param.grad.to(comm_device) for param in self.model.parameters()]
+            model_grads = [param.grad.detach().cpu() for param in self.model.parameters()]
+            embeddings_grad = [
+                self.input[0].grad.detach().cpu(),
+                self.input[2].grad.detach().cpu(),
+                self.input[4].grad.detach().cpu(),
+            ]
 
-            # user_embed,ent_emded,rel_embed的梯度
-            gather_dict['embeddings_grad']=[self.input[0].grad.to(comm_device), self.input[2].grad.to(comm_device),
-                            self.input[4].grad.to(comm_device)] if self.conf.graph.client_id != -1 else [None] * 3
+            metadata = torch.tensor(
+                [self.conf.graph.client_id, len(model_grads)], dtype=torch.long
+            )
+            payload = [metadata] + model_grads + embeddings_grad
+
+            if getattr(self.conf, "logger", None) is not None:
+                try:
+                    def _tensor_bytes(t):
+                        return t.numel() * t.element_size()
+
+                    total_bytes = sum(_tensor_bytes(t) for t in model_grads + embeddings_grad)
+                    total_mb = total_bytes / (1024 * 1024)
+                    self.conf.logger.log(
+                        f"Worker-{self.conf.graph.worker_id} sending grads: model_grad[0] device={model_grads[0].device}, embeddings_grad[0] device={embeddings_grad[0].device}, total_size_mb={total_mb:.2f}"
+                    )
+                except Exception:
+                    pass
         else:
-            gather_dict=None
+            metadata = torch.tensor([-1, 0], dtype=torch.long)
+            payload = [metadata]
 
-        gather_objects(gather_dict)
-        # self.conf.logger.log(
-        #     f"Worker-{self.conf.graph.worker_id} (client-{self.conf.graph.client_id}) sending the model back to Master."
-        # )
-        # dist.barrier()
-
+        try:
+            send_list(payload, dst=0)
+        except Exception as exc:
+            if getattr(self.conf, "logger", None) is not None:
+                self.conf.logger.log(f"Worker-{self.conf.graph.worker_id} gather failed: {exc}")
+            raise
 
 
     def _terminate_comm_round(self):

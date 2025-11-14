@@ -5,8 +5,9 @@ from datetime import timedelta
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=FutureWarning)
 import sys
+import os
 import traceback
-from distutils import dist
+import torch.distributed as dist
 import torch.multiprocessing as mp
 from parameters import get_args, init_config
 from pcode.master import Master
@@ -82,17 +83,19 @@ def init_process(rank, size, fn, conf):
         traceback.print_exc()
         raise e
 
-
+# 计算机标准化通信（Message Passing Interface）
 def is_mpi_enabled():
     return 'MPI_COMM_WORLD_SIZE' in os.environ
 
 
+# 设置工作目录
 def set_working_directory():
     current_file = os.path.abspath(__file__)
     directory = os.path.dirname(current_file)
     os.chdir(directory)
 
 
+# 运行MPI
 def run_mpi():
     if is_mpi_enabled():
         init_process(0, 0, run, conf)

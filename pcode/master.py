@@ -16,7 +16,7 @@ import pcode.create_metrics as create_metrics
 import pcode.create_model as create_model
 import pcode.master_utils as master_utils
 import pcode.utils.checkpoint as checkpoint
-from pcode.utils.auto_distributed import gather_objects, scatter_objects
+from pcode.utils.auto_distributed import recv_list, scatter_objects
 from pcode.utils.early_stopping import EarlyStoppingTracker
 from pcode.utils.tensor_buffer import TensorBuffer
 from pcode.utils.topk_eval import TopkEval
@@ -29,6 +29,10 @@ class Master(object):
         init_swanlab(conf, 'graph_recommendation', conf.experiment,
                    {"loss": "min", "accuracy": "max", "auc": "max", "precision": "max", "recall": "max", "ndcg": "max"},
                    "comm_round")
+
+        # Default training progress values (may be overridden when resuming)
+        self.start_comm_round = 1  # Default start round
+        self._saved_best_perf = None  # Will store best_perf from checkpoint
 
         self.init_parameters(conf)
 
@@ -62,12 +66,15 @@ class Master(object):
 
         # save arguments to disk.
         conf.is_finished = False
-        # 调用 checkpoint 对象的 save_arguments 方法。作用是将配置参数保存到磁盘上
-        checkpoint.save_arguments(conf)
+
+        # Note: Checkpoint loading will be done after coordinator is initialized
+        # to properly restore best_perf. Save arguments for new training.
+        if conf.resume is None or conf.resume == "":
+            checkpoint.save_arguments(conf)
 
         # simulation parameter
         self.worker_archs = collections.defaultdict(str) #默认值为 str（即空字符串）
-        self.last_comm_round = 0 #用于跟踪训练过程中的最后一个通信轮次
+        self.last_comm_round = self.start_comm_round - 1 #用于跟踪训练过程中的最后一个通信轮次
 
     def init_criterion_and_metric(self, conf):
 
@@ -76,7 +83,13 @@ class Master(object):
         # self.criterion = cross_entropy.CrossEntropyLoss(reduction="mean")
         # 定义评估指标
         # TopkEval 的构造函数中传入了数据配置 (self.conf.data)、训练数据集 (self.dataset['train'])、测试数据集 (self.dataset['test'])，以及 k_list（表示不同的 k 值）。
-        self.topk_eval = TopkEval(self.conf.data, self.dataset['train'], self.dataset['test'],k_list=self.conf.k_list)
+        self.topk_eval = TopkEval(
+            self.conf.data,
+            self.dataset['train'],
+            self.dataset['test'],
+            k_list=self.conf.k_list,
+            logger=self.conf.logger,
+        )
         # 定义损失函数，一个二元交叉熵损失函数，常用于二分类任务。
         self.criterion = torch.nn.BCELoss()
         # 定义评估指标
@@ -87,6 +100,10 @@ class Master(object):
         self.coordinator = create_coordinator.Coordinator(conf, self.metrics)
         # 记录日志，表示聚合器或协调器已初始化完成
         conf.logger.log(f"Master initialized the aggregator/coordinator.\n")
+        
+        # Load checkpoint if resume is specified (after coordinator is initialized)
+        if conf.resume is not None and conf.resume != "":
+            self._load_checkpoint(conf)
 
     def init_dataloader(self, conf):
         # 初始化训练、验证和测试数据的加载器，并支持按用户分区的加载器设置，用于不同的客户端数据拆分
@@ -156,6 +173,17 @@ class Master(object):
         self.conf.n_clients = self.conf.kg[1]
         print('self.conf.n_clients-----------------------------------------------')
         print(self.conf.n_clients)
+        # 更新 client_ids 以匹配实际的客户端数量
+        self.client_ids = list(range(self.conf.n_clients))
+        # 确保 n_participated 不超过实际的客户端数量
+        if self.conf.n_participated > self.conf.n_clients:
+            self.conf.logger.log(
+                f"Warning: n_participated ({self.conf.n_participated}) exceeds n_clients ({self.conf.n_clients}). "
+                f"Setting n_participated to {self.conf.n_clients}."
+            )
+            self.conf.n_participated = self.conf.n_clients
+        # 更新 world_ids 以匹配更新后的 n_participated
+        self.world_ids = list(range(1, 1 + self.conf.n_participated))
         # 初始化主模型
         _, self.master_model = create_model.define_model(
             conf, to_consistent_model=False
@@ -204,7 +232,10 @@ class Master(object):
 
     def run(self):
         # run 方法实现了一个用于联邦学习的循环过程，主要包括通信轮次的管理、客户端选择、模型传递、聚合、早停检测等操作。
-        for comm_round in range(1, 1 + self.conf.n_comm_rounds):
+        # Start from the resumed round if checkpoint was loaded
+        start_round = self.start_comm_round
+        self.conf.logger.log(f"Starting training from comm_round={start_round} (total rounds={self.conf.n_comm_rounds})")
+        for comm_round in range(start_round, 1 + self.conf.n_comm_rounds):
             # 循环遍历 comm_round（通信轮次）
             self.conf.graph.comm_round = comm_round
             self.conf.logger.log(
@@ -255,7 +286,9 @@ class Master(object):
             self._evaluate()
 
             # evaluate the aggregated model.
-            self.conf.logger.log(f"Master finished one round of federated learning.\n")
+            self.conf.logger.log(
+                f"Master finished comm_round={comm_round} of federated learning."
+            )
 
         # formally stop the training (the master has finished all communication rounds).
         # dist.barrier()
@@ -347,11 +380,28 @@ class Master(object):
 
     def _receive_models_from_selected_clients(self, selected_client_ids):
         self.conf.logger.log(f"Master waits to receive the local models.")
-        # dist.monitored_barrier()
-        output = gather_objects()
-        # outout[0]是主节点的None
-        flatten_local_models={client:model for client,model in zip(selected_client_ids, output[1:]) if client!=-1}
-        # dist.barrier()
+
+        flatten_local_models = {}
+        for worker_rank, expected_client_id in enumerate(selected_client_ids, start=1):
+            tensors = recv_list(worker_rank)
+            if len(tensors) == 0:
+                continue
+
+            metadata = tensors[0].to(torch.long).cpu()
+            recv_client_id = int(metadata[0].item())
+            grad_count = int(metadata[1].item())
+
+            if recv_client_id == -1:
+                continue
+
+            model_grads = tensors[1:1 + grad_count]
+            embeddings_grad = tensors[1 + grad_count:]
+
+            flatten_local_models[recv_client_id] = {
+                'model_grad': model_grads,
+                'embeddings_grad': embeddings_grad,
+            }
+
         self.conf.logger.log(f"Master received all local models.")
         return flatten_local_models
 
@@ -487,7 +537,12 @@ class Master(object):
             self._validation()
         # 每隔topk_eval_interval轮，评估一次性能
         if self.conf.graph.comm_round % self.conf.topk_eval_interval == 0:
-            self.topk_eval.eval(self.master_model, self.last_comm_round)
+            try:
+                self.topk_eval.eval(self.master_model, self.last_comm_round)
+            except Exception as exc:
+                self.conf.logger.log(
+                    f"Top-K evaluation skipped at comm_round={self.conf.graph.comm_round}: {exc}"
+                )
 
 
     def _validation(self):
@@ -554,6 +609,79 @@ class Master(object):
         checkpoint.save_arguments(self.conf)
         os.system(f"echo {self.conf.checkpoint_root} >> {self.conf.job_id}")
 
+
+    def _load_checkpoint(self, conf):
+        """
+        Load checkpoint and restore model state and training progress.
+        
+        Args:
+            conf: Configuration object
+        """
+        import os
+        from os.path import join
+        
+        # Find checkpoint file
+        checkpoint_file = None
+        if os.path.isfile(conf.resume):
+            checkpoint_file = conf.resume
+        elif os.path.isdir(conf.resume):
+            # Try to find checkpoint in the directory
+            checkpoint_file = checkpoint.find_latest_checkpoint(conf.resume)
+            if checkpoint_file is None:
+                # Try to find in rank 0 subdirectory
+                rank_0_dir = join(conf.resume, "0")
+                if os.path.isdir(rank_0_dir):
+                    checkpoint_file = checkpoint.find_latest_checkpoint(rank_0_dir)
+        else:
+            # Treat as directory path
+            checkpoint_file = checkpoint.find_latest_checkpoint(conf.resume)
+        
+        if checkpoint_file is None or not os.path.exists(checkpoint_file):
+            conf.logger.log(f"Warning: Checkpoint file not found at {conf.resume}. Starting from scratch.")
+            checkpoint.save_arguments(conf)
+            return
+        
+        # Load checkpoint
+        conf.logger.log(f"Loading checkpoint from: {checkpoint_file}")
+        try:
+            ckpt = checkpoint.load_checkpoint(checkpoint_file)
+            
+            # Restore model state
+            if "state_dict" in ckpt:
+                try:
+                    self.master_model.load_state_dict(ckpt["state_dict"])
+                    conf.logger.log("Model state loaded successfully.")
+                except Exception as e:
+                    conf.logger.log(f"Warning: Failed to load model state: {e}. Continuing with new model.")
+            
+            # Restore training progress
+            if "current_comm_round" in ckpt:
+                self.start_comm_round = ckpt["current_comm_round"] + 1  # Start from next round
+                conf.logger.log(f"Resuming from comm_round {self.start_comm_round} (was at {ckpt['current_comm_round']})")
+            else:
+                conf.logger.log("Warning: current_comm_round not found in checkpoint. Starting from round 1.")
+            
+            # Restore best performance to coordinator
+            best_perf = ckpt.get("best_perf")
+            if best_perf is not None and hasattr(self, 'coordinator') and self.coordinator is not None:
+                if isinstance(best_perf, dict):
+                    # Restore best performance to coordinator's best trackers
+                    for metric_name, best_value in best_perf.items():
+                        if metric_name in self.coordinator.best_trackers:
+                            self.coordinator.best_trackers[metric_name].best_perf = best_value
+                    conf.logger.log(f"Best performance restored: {best_perf}")
+                else:
+                    # Some checkpoints store a single scalar best_perf (e.g., best AUC)
+                    self._saved_best_perf = float(best_perf)
+                    conf.logger.log(f"Best performance restored (scalar): {self._saved_best_perf}")
+            
+            conf.logger.log(f"Checkpoint loaded successfully. Will resume from comm_round {self.start_comm_round}")
+            # Save arguments after loading checkpoint (to update checkpoint directory info)
+            checkpoint.save_arguments(conf)
+            
+        except Exception as e:
+            conf.logger.log(f"Error loading checkpoint: {e}. Starting from scratch.")
+            checkpoint.save_arguments(conf)
 
     def _get_n_local_epoch(self, conf, n_participated):
         #  conf.min_local_epochs ===None

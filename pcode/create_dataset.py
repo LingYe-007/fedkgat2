@@ -138,7 +138,7 @@ def define_data_loader(
         data_to_load,
         batch_size=conf.batch_size,
         shuffle=shuffle,
-        # num_workers=conf.num_workers,
+        num_workers=0,  # 0表示主进程加载，避免多进程冲突
         pin_memory=conf.pin_memory,
         drop_last=False,
         # multiprocessing_context='fork',

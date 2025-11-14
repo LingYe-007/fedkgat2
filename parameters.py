@@ -4,6 +4,7 @@ import argparse
 import os
 import random
 import socket
+import sys
 import time
 import traceback
 from contextlib import closing
@@ -151,6 +152,12 @@ def add_argument():
         default=0.1,
         type=float,
         help="number of participated ratio per communication rounds",
+    )
+    parser.add_argument(
+        "--workers",
+        default=None,
+        type=int,
+        help="number of worker processes to spawn for distributed training.",
     )
     # 如果指定了具体数量，则表示每回合参与的客户端数目，而非比例
     parser.add_argument("--n_participated", default=None, type=int)
@@ -523,23 +530,32 @@ def experiment_paramenter(conf):
         conf.neighbor_sample_size = 8
         conf.dim = 16
         conf.n_iter = 1 # 迭代次数
-        conf.weight_decay = 1e-5
-        conf.lr = 5e-5
-        conf.batch_size = 32
+        if "--weight_decay" not in sys.argv:
+            conf.weight_decay = 1e-5
+        if "--lr" not in sys.argv:
+            conf.lr = 5e-5
+        if "--batch_size" not in sys.argv and "-b" not in sys.argv:
+            conf.batch_size = 32
     elif conf.data == 'book':
         conf.neighbor_sample_size = 8
         conf.dim = 64
         conf.n_iter = 1
-        conf.weight_decay = 2e-5
-        conf.lr = 2e-4
-        conf.batch_size = 32
+        if "--weight_decay" not in sys.argv:
+            conf.weight_decay = 2e-5
+        if "--lr" not in sys.argv:
+            conf.lr = 2e-4
+        if "--batch_size" not in sys.argv and "-b" not in sys.argv:
+            conf.batch_size = 32
     elif conf.data == 'movie':
         conf.neighbor_sample_size = 4
         conf.dim = 32
         conf.n_iter = 2
-        conf.weight_decay = 1e-7
-        conf.lr = 2e-2
-        conf.batch_size = 32
+        if "--weight_decay" not in sys.argv:
+            conf.weight_decay = 1e-7
+        if "--lr" not in sys.argv:
+            conf.lr = 2e-2
+        if "--batch_size" not in sys.argv and "-b" not in sys.argv:
+            conf.batch_size = 32
 
 # add debug environment
 def debug_parameter(conf):
@@ -554,15 +570,17 @@ def debug_parameter(conf):
         conf.validation_interval = 1
         conf.topk_eval_interval = 1
     else:
-        conf.n_participated = 32
-        conf.workers = 32
+        if "--n_participated" not in sys.argv and "--participation_ratio" not in sys.argv:
+            conf.n_participated = 32
+        conf.workers = getattr(conf, "workers", None) or 32
         conf.validation_interval = 10
         conf.topk_eval_interval =30
     conf.train_fast = True
     conf.backend = "gloo"
     print(f"Using backend: {conf.backend}")
 
-    conf.n_comm_rounds = 2000*32
+    if "--n_comm_rounds" not in sys.argv:
+        conf.n_comm_rounds = 2000
     conf.aggregator = "sum"
     conf.same_arch=True
     conf.experiment=f'fedKgcn_dataset_{conf.data}_np_{conf.n_participated}_nc_{conf.n_comm_rounds}'

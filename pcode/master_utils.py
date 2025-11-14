@@ -74,6 +74,8 @@ def do_validation(
     # save to the checkpoint.
     conf.logger.log(f"Master finished the validation.")
     best_perf_to_track = list(coordinator.best_trackers.keys())[1]
+    # 即使train_fast=True，也要保存latest checkpoint以便恢复训练
+    # Save checkpoint even in train_fast mode to enable resume from interruption
     if not conf.train_fast:
         checkpoint.save_to_checkpoint(
             conf,
@@ -89,6 +91,23 @@ def do_validation(
             save_all=conf.save_all_models,
         )
         conf.logger.log(f"Master saved to checkpoint.")
+    else:
+        # In train_fast mode, still save latest checkpoint periodically (every validation)
+        # This allows resuming training after interruption
+        checkpoint.save_to_checkpoint(
+            conf,
+            {
+                "arch": conf.arch,
+                "current_comm_round": conf.graph.comm_round,
+                "best_perf": coordinator.best_trackers[best_perf_to_track].best_perf,
+                "state_dict": model.state_dict(),
+            },
+            coordinator.best_trackers[best_perf_to_track].is_best,
+            dirname=conf.checkpoint_root,
+            filename="checkpoint.pth.tar",
+            save_all=False,  # Don't save all models in fast mode
+        )
+        conf.logger.log(f"Master saved latest checkpoint (train_fast mode).")
 
 
 def get_avg_perf_on_dataloaders(
