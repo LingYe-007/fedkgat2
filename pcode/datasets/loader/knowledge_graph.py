@@ -232,6 +232,15 @@ class RecommendationDS(data.Dataset):
     def __len__(self):
         return len(self.idx)
 
+    @property
+    def targets(self):
+        """
+        Return labels for all samples in current idx.
+        This property ensures targets always match the current self.idx,
+        even after set_user() is called.
+        """
+        return self.df.loc[self.idx]['label'].values.astype(np.int64)
+
     def __getitem__(self, idx):
         user_id = np.array(self.df.loc[self.idx[idx]]['userID'])
         item_id = np.array(self.df.loc[self.idx[idx]]['itemID'])

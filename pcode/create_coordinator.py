@@ -41,6 +41,7 @@ class Coordinator(object):
             scalar_payload[name] = scalar_value
 
         if scalar_payload:
+            scalar_payload["comm_round"] = log_step
             swanlab.log(scalar_payload, step=log_step)
             try:
                 metrics_str = json.dumps(scalar_payload, ensure_ascii=False)

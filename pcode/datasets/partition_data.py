@@ -24,6 +24,22 @@ class Partition(object):
             return self.data[data_idx]
         else:
             return (self.data[data_idx][0], self.replaced_targets[index])
+    
+    @property
+    def targets(self):
+        """Return targets for the partitioned indices."""
+        if hasattr(self.data, 'targets'):
+            # If underlying dataset has targets property, return subset based on indices
+            all_targets = self.data.targets
+            return all_targets[self.indices] if isinstance(all_targets, np.ndarray) else [all_targets[i] for i in self.indices]
+        raise AttributeError(f"Underlying dataset {type(self.data)} does not have targets attribute")
+    
+    @property
+    def df(self):
+        """Proxy property to access df from underlying dataset."""
+        if hasattr(self.data, 'df'):
+            return self.data.df
+        raise AttributeError(f"Underlying dataset {type(self.data)} does not have df attribute")
 
     def update_replaced_targets(self, replaced_targets):
         self.replaced_targets = replaced_targets
@@ -39,6 +55,36 @@ class Partition(object):
 
     def clean_replaced_targets(self):
         self.replaced_targets = None
+    
+    def get_kg(self):
+        """Proxy method to access get_kg from underlying dataset."""
+        if hasattr(self.data, 'get_kg'):
+            return self.data.get_kg()
+        raise AttributeError(f"Underlying dataset {type(self.data)} does not have get_kg method")
+    
+    def get_encoders(self):
+        """Proxy method to access get_encoders from underlying dataset."""
+        if hasattr(self.data, 'get_encoders'):
+            return self.data.get_encoders()
+        raise AttributeError(f"Underlying dataset {type(self.data)} does not have get_encoders method")
+    
+    def get_num(self):
+        """Proxy method to access get_num from underlying dataset."""
+        if hasattr(self.data, 'get_num'):
+            return self.data.get_num()
+        raise AttributeError(f"Underlying dataset {type(self.data)} does not have get_num method")
+    
+    def set_user(self, user_id):
+        """Proxy method to access set_user from underlying dataset."""
+        if hasattr(self.data, 'set_user'):
+            return self.data.set_user(user_id)
+        raise AttributeError(f"Underlying dataset {type(self.data)} does not have set_user method")
+    
+    def get(self, attr):
+        """Proxy method to access get from underlying dataset."""
+        if hasattr(self.data, 'get'):
+            return self.data.get(attr)
+        raise AttributeError(f"Underlying dataset {type(self.data)} does not have get method")
 
 
 class DataSampler(object):

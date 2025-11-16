@@ -546,27 +546,34 @@ class Master(object):
 
 
     def _validation(self):
-        if self.conf.same_arch:
-            master_utils.do_validation(
-                self.conf,
-                self.coordinator,
-                self.master_model,
-                self.criterion,
-                self.metrics,
-                self.test_loaders,
-                label=f"aggregated_test_loader",
-            )
-        else:
-            for arch, _client_model in self.client_models.items():
+        try:
+            if self.conf.same_arch:
                 master_utils.do_validation(
                     self.conf,
                     self.coordinator,
-                    _client_model,
+                    self.master_model,
                     self.criterion,
                     self.metrics,
                     self.test_loaders,
-                    label=f"aggregated_test_loader_{arch}",
+                    label=f"aggregated_test_loader",
                 )
+            else:
+                for arch, _client_model in self.client_models.items():
+                    master_utils.do_validation(
+                        self.conf,
+                        self.coordinator,
+                        _client_model,
+                        self.criterion,
+                        self.metrics,
+                        self.test_loaders,
+                        label=f"aggregated_test_loader_{arch}",
+                    )
+        except Exception as exc:
+            self.conf.logger.log(
+                f"Validation failed at comm_round={self.conf.graph.comm_round}: {exc}. Continuing training..."
+            )
+            import traceback
+            self.conf.logger.log(traceback.format_exc())
 
     def _check_early_stopping(self):
         meet_flag = False
