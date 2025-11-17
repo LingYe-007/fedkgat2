@@ -526,11 +526,50 @@ class Master(object):
             # here the 'client_models' are updated in-place.
             if same_arch:
                 # here the 'master_model' is updated in-place only for 'same_arch is True'.
-                self.master_model.load_state_dict(
-                    list(client_models.values())[0].state_dict()
-                )
+                aggregated_model = list(client_models.values())[0]
+                aggregated_state_dict = aggregated_model.state_dict()
+                
+                # 如果 aggregated_model 是 KGCN_aggregator，需要转换键名以匹配 KGCN_kg
+                if hasattr(aggregated_model, '__class__') and 'KGCN_aggregator' in aggregated_model.__class__.__name__:
+                    # 转换键名：从 aggregator.xxx 转换为 aggregator.aggregator.xxx
+                    converted_state_dict = {}
+                    for key, value in aggregated_state_dict.items():
+                        if key.startswith('aggregator.'):
+                            # 将 aggregator.xxx 转换为 aggregator.aggregator.xxx
+                            new_key = 'aggregator.' + key
+                            converted_state_dict[new_key] = value
+                        else:
+                            # 保留其他键（如果有的话）
+                            converted_state_dict[key] = value
+                    aggregated_state_dict = converted_state_dict
+                
+                # 只加载匹配的键，忽略不匹配的键（如 usr.weight, ent.weight, rel.weight, adj_ent, adj_rel）
+                master_state_dict = self.master_model.state_dict()
+                filtered_state_dict = {k: v for k, v in aggregated_state_dict.items() if k in master_state_dict}
+                
+                # 加载过滤后的 state_dict
+                self.master_model.load_state_dict(filtered_state_dict, strict=False)
             for arch, _client_model in client_models.items():
-                self.client_models[arch].load_state_dict(_client_model.state_dict())
+                aggregated_state_dict = _client_model.state_dict()
+                
+                # 如果 _client_model 是 KGCN_aggregator，需要转换键名以匹配 client_models[arch]
+                if hasattr(_client_model, '__class__') and 'KGCN_aggregator' in _client_model.__class__.__name__:
+                    # 转换键名：从 aggregator.xxx 转换为 aggregator.aggregator.xxx
+                    converted_state_dict = {}
+                    for key, value in aggregated_state_dict.items():
+                        if key.startswith('aggregator.'):
+                            # 将 aggregator.xxx 转换为 aggregator.aggregator.xxx
+                            new_key = 'aggregator.' + key
+                            converted_state_dict[new_key] = value
+                        else:
+                            # 保留其他键（如果有的话）
+                            converted_state_dict[key] = value
+                    aggregated_state_dict = converted_state_dict
+                
+                # 只加载匹配的键
+                client_state_dict = self.client_models[arch].state_dict()
+                filtered_state_dict = {k: v for k, v in aggregated_state_dict.items() if k in client_state_dict}
+                self.client_models[arch].load_state_dict(filtered_state_dict, strict=False)
         else:
             # update self.master_model in place.
             # if same_arch:
@@ -539,7 +578,26 @@ class Master(object):
             # 更新客户端模型参数
             for arch, _fedavg_model in fedavg_models.items():
                 # 表示将 _fedavg_model 的权重和偏置参数加载到 self.client_models[arch] 中的对应模型
-                self.client_models[arch].load_state_dict(_fedavg_model.state_dict())
+                aggregated_state_dict = _fedavg_model.state_dict()
+                
+                # 如果 _fedavg_model 是 KGCN_aggregator，需要转换键名以匹配 client_models[arch]
+                if hasattr(_fedavg_model, '__class__') and 'KGCN_aggregator' in _fedavg_model.__class__.__name__:
+                    # 转换键名：从 aggregator.xxx 转换为 aggregator.aggregator.xxx
+                    converted_state_dict = {}
+                    for key, value in aggregated_state_dict.items():
+                        if key.startswith('aggregator.'):
+                            # 将 aggregator.xxx 转换为 aggregator.aggregator.xxx
+                            new_key = 'aggregator.' + key
+                            converted_state_dict[new_key] = value
+                        else:
+                            # 保留其他键（如果有的话）
+                            converted_state_dict[key] = value
+                    aggregated_state_dict = converted_state_dict
+                
+                # 只加载匹配的键
+                client_state_dict = self.client_models[arch].state_dict()
+                filtered_state_dict = {k: v for k, v in aggregated_state_dict.items() if k in client_state_dict}
+                self.client_models[arch].load_state_dict(filtered_state_dict, strict=False)
         self.conf.logger.log (
             f"\tMaster finish aggregate the models."
         )
