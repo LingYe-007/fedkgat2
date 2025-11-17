@@ -41,6 +41,24 @@ n_clients: 10
 participation_ratio: 0.1
 fl_aggregate: "avg"
 
+# Relation Attention Mechanism settings
+relation_attention:
+  enabled: true  # 是否启用关系注意力机制
+  alpha: 0.5     # 关系注意力分数与用户-关系得分的混合权重
+  attention_type: "mlp"  # "linear" 或 "mlp"
+  mlp_hidden_dim: null   # 如果使用 MLP，隐藏层维度（默认 dim/2）
+
+# Relation Adaptive Aggregation settings
+relation_adaptive_aggregation:
+  enabled: true           # 是否启用关系自适应聚合
+  similarity_method: "kl_divergence"  # "kl_divergence" 或 "cosine"
+  temperature: 1.0        # softmax 温度参数（用于权重计算）
+
+# Relation Statistics settings
+relation_statistics:
+  track_during_training: true  # 是否在训练过程中跟踪关系使用情况
+  update_frequency: 1          # 更新频率（每 N 个 batch 更新一次）
+
 # Data settings
 train_data_path: "./data/train"
 test_data_path: "./data/test"

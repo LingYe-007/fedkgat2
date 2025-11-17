@@ -153,12 +153,6 @@ def add_argument():
         type=float,
         help="number of participated ratio per communication rounds",
     )
-    parser.add_argument(
-        "--workers",
-        default=None,
-        type=int,
-        help="number of worker processes to spawn for distributed training.",
-    )
     # 如果指定了具体数量，则表示每回合参与的客户端数目，而非比例
     parser.add_argument("--n_participated", default=None, type=int)
     # 指定联邦学习的聚合策略（例如，FedAvg、FedProx 等）。该参数决定如何合并客户端的更新
@@ -396,6 +390,62 @@ def complete_missing_config(conf):
     if not conf.n_participated:
         conf.n_participated = int(conf.n_clients * conf.participation_ratio + 0.5)
     conf.timestamp = str(int(time.time()))
+    
+    # 关系注意力机制配置默认值
+    if not hasattr(conf, 'relation_attention') or conf.relation_attention is None:
+        conf.relation_attention = {
+            'enabled': True,
+            'alpha': 0.5,
+            'attention_type': 'mlp',
+            'mlp_hidden_dim': None
+        }
+    else:
+        # 确保所有字段都存在
+        if not isinstance(conf.relation_attention, dict):
+            conf.relation_attention = {'enabled': True, 'alpha': 0.5, 'attention_type': 'mlp', 'mlp_hidden_dim': None}
+        else:
+            conf.relation_attention.setdefault('enabled', True)
+            conf.relation_attention.setdefault('alpha', 0.5)
+            conf.relation_attention.setdefault('attention_type', 'mlp')
+            conf.relation_attention.setdefault('mlp_hidden_dim', None)
+    
+    # 关系自适应聚合配置默认值
+    if not hasattr(conf, 'relation_adaptive_aggregation') or conf.relation_adaptive_aggregation is None:
+        conf.relation_adaptive_aggregation = {
+            'enabled': True,
+            'similarity_method': 'kl_divergence',
+            'temperature': 1.0
+        }
+    else:
+        if not isinstance(conf.relation_adaptive_aggregation, dict):
+            conf.relation_adaptive_aggregation = {'enabled': True, 'similarity_method': 'kl_divergence', 'temperature': 1.0}
+        else:
+            conf.relation_adaptive_aggregation.setdefault('enabled', True)
+            conf.relation_adaptive_aggregation.setdefault('similarity_method', 'kl_divergence')
+            conf.relation_adaptive_aggregation.setdefault('temperature', 1.0)
+    
+    # 关系统计配置默认值
+    if not hasattr(conf, 'relation_statistics') or conf.relation_statistics is None:
+        conf.relation_statistics = {
+            'track_during_training': True,
+            'update_frequency': 1
+        }
+    else:
+        if not isinstance(conf.relation_statistics, dict):
+            conf.relation_statistics = {'track_during_training': True, 'update_frequency': 1}
+        else:
+            conf.relation_statistics.setdefault('track_during_training', True)
+            conf.relation_statistics.setdefault('update_frequency', 1)
+    
+    # 为了向后兼容，也设置扁平化的属性
+    if not hasattr(conf, 'use_relation_attention'):
+        conf.use_relation_attention = conf.relation_attention.get('enabled', True) if isinstance(conf.relation_attention, dict) else True
+    if not hasattr(conf, 'relation_attention_alpha'):
+        conf.relation_attention_alpha = conf.relation_attention.get('alpha', 0.5) if isinstance(conf.relation_attention, dict) else 0.5
+    if not hasattr(conf, 'relation_attention_type'):
+        conf.relation_attention_type = conf.relation_attention.get('attention_type', 'mlp') if isinstance(conf.relation_attention, dict) else 'mlp'
+    if not hasattr(conf, 'track_relation_distribution'):
+        conf.track_relation_distribution = conf.relation_statistics.get('track_during_training', True) if isinstance(conf.relation_statistics, dict) else True
 
 
 # find free port for communication.
