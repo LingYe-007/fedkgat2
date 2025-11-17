@@ -17,7 +17,7 @@ class Aggregator(torch.nn.Module):
     Mode in ['sum', 'concat', 'neighbor']
     '''
 
-    def __init__(self, batch_size, dim, aggregator):
+    def __init__(self, batch_size, dim, aggregator, use_relation_attention=True, relation_attention_alpha=0.5, relation_attention_type='mlp'):
         super(Aggregator, self).__init__()
         self.batch_size = batch_size
         self.dim = dim  # 16
@@ -27,6 +27,34 @@ class Aggregator(torch.nn.Module):
         else:
             self.weights = torch.nn.Linear(dim, dim, bias=True)
         self.aggregator = aggregator
+        
+        # 关系注意力机制相关参数
+        self.use_relation_attention = use_relation_attention
+        self.relation_attention_alpha = relation_attention_alpha
+        self.relation_attention_type = relation_attention_type
+        
+        # 初始化关系注意力层
+        if self.use_relation_attention:
+            if relation_attention_type == 'linear':
+                # 简单的线性层：dim -> 1
+                self.relation_attention_layer = torch.nn.Linear(dim, 1, bias=True)
+            elif relation_attention_type == 'mlp':
+                # MLP：dim -> dim/2 -> 1
+                hidden_dim = max(1, dim // 2)
+                self.relation_attention_layer = torch.nn.Sequential(
+                    torch.nn.Linear(dim, hidden_dim, bias=True),
+                    torch.nn.ReLU(),
+                    torch.nn.Linear(hidden_dim, 1, bias=True)
+                )
+            else:
+                raise ValueError(f"Unsupported relation_attention_type: {relation_attention_type}. Use 'linear' or 'mlp'.")
+            
+            # 使用 Xavier 初始化关系注意力层
+            for module in self.relation_attention_layer.modules():
+                if isinstance(module, torch.nn.Linear):
+                    torch.nn.init.xavier_normal_(module.weight)
+                    if module.bias is not None:
+                        torch.nn.init.zeros_(module.bias)
 
     def forward(self, self_vectors, neighbor_vectors, neighbor_relations, user_embeddings, act):
         # 前向传播函数,act：激活函数（如 ReLU、Sigmoid 等）
@@ -55,6 +83,7 @@ class Aggregator(torch.nn.Module):
     def _mix_neighbor_vectors(self, neighbor_vectors, neighbor_relations, user_embeddings):
         '''
         This aims to aggregate neighbor vectors邻居特征聚合函数，根据用户嵌入与邻居之间的关系，计算加权聚合
+        现在支持关系注意力机制，可以区分不同关系的语义重要性
         '''
         # [batch_size, 1, dim] -> [batch_size, 1, 1, dim]重塑为形状使其能够与邻居关系矩阵进行逐元素乘法。
         user_embeddings = user_embeddings.reshape((self.batch_size, 1, 1, self.dim))
@@ -64,13 +93,36 @@ class Aggregator(torch.nn.Module):
         # print('user_embeddings',user_embeddings.shape)
         # print('neighbor_relations',neighbor_relations.shape)
         user_relation_scores = (user_embeddings * neighbor_relations).sum(dim=-1)
-        user_relation_scores_normalized = F.softmax(user_relation_scores, dim=-1) #归一化
+        
+        # 如果启用关系注意力机制，计算关系注意力分数并融合
+        if self.use_relation_attention:
+            # 计算关系注意力分数
+            # neighbor_relations: [batch_size, -1, n_neighbor, dim]
+            # 需要将形状调整为 [batch_size * -1 * n_neighbor, dim] 以通过线性层
+            original_shape = neighbor_relations.shape  # [batch_size, -1, n_neighbor, dim]
+            neighbor_relations_flat = neighbor_relations.reshape(-1, self.dim)  # [batch_size * -1 * n_neighbor, dim]
+            
+            # 通过关系注意力层计算注意力分数
+            relation_attention_scores_flat = self.relation_attention_layer(neighbor_relations_flat)  # [batch_size * -1 * n_neighbor, 1]
+            
+            # 恢复原始形状
+            relation_attention_scores = relation_attention_scores_flat.reshape(original_shape[:-1])  # [batch_size, -1, n_neighbor]
+            
+            # 将关系注意力分数与用户-关系得分结合
+            # combined_scores = user_relation_scores + alpha * relation_attention_scores
+            combined_scores = user_relation_scores + self.relation_attention_alpha * relation_attention_scores
+            
+            # 对融合后的得分进行 softmax 归一化
+            scores_normalized = F.softmax(combined_scores, dim=-1)  # [batch_size, -1, n_neighbor]
+        else:
+            # 原始方法：只使用用户-关系得分
+            scores_normalized = F.softmax(user_relation_scores, dim=-1)  # 归一化
 
         # [batch_size, -1, n_neighbor] -> [batch_size, -1, n_neighbor, 1]
-        user_relation_scores_normalized = user_relation_scores_normalized.unsqueeze(dim=-1)
+        scores_normalized = scores_normalized.unsqueeze(dim=-1)
 
         # [batch_size, -1, n_neighbor, 1] * [batch_size, -1, n_neighbor, dim] -> [batch_size, -1, dim]
-        neighbors_aggregated = (user_relation_scores_normalized * neighbor_vectors).sum(dim=2)
+        neighbors_aggregated = (scores_normalized * neighbor_vectors).sum(dim=2)
 
         return neighbors_aggregated
 
@@ -87,7 +139,18 @@ class KGCN(torch.nn.Module):
         self.n_neighbor = args.neighbor_sample_size  # 采样邻居个数
         self.kg = kg
         self.device = device
-        self.aggregator = Aggregator(self.batch_size, self.dim, args.aggregator)  # 相加然后过线性层
+        # 从 args 中读取关系注意力相关参数，如果不存在则使用默认值
+        use_relation_attention = getattr(args, 'use_relation_attention', True)
+        relation_attention_alpha = getattr(args, 'relation_attention_alpha', 0.5)
+        relation_attention_type = getattr(args, 'relation_attention_type', 'mlp')
+        self.aggregator = Aggregator(
+            self.batch_size, 
+            self.dim, 
+            args.aggregator,
+            use_relation_attention=use_relation_attention,
+            relation_attention_alpha=relation_attention_alpha,
+            relation_attention_type=relation_attention_type
+        )  # 相加然后过线性层
         self.init = torch.nn.init.xavier_normal_
         self._gen_adj()  # 对KG中的每一个head,固定采样n_neighbor个邻居节点和关系
 
@@ -99,6 +162,11 @@ class KGCN(torch.nn.Module):
         self.init(self.rel)
 
         self._init_trained_tracker()
+        
+        # 关系分布统计相关初始化
+        # 使用 torch.zeros 在 CPU 上维护关系计数器，避免影响 GPU 训练
+        self.relation_counter = torch.zeros(num_rel, dtype=torch.long)
+        self.track_relation_distribution = getattr(args, 'track_relation_distribution', True)
 
     def _init_trained_tracker(self):
         self.trained = defaultdict(list)
@@ -145,6 +213,10 @@ class KGCN(torch.nn.Module):
         user_embeddings = self.usr[u].squeeze(dim=1)
         if entities == None and relations == None:
             entities, relations = self._get_neighbors(v)  # 对每一个user-item的item,取item的n_iter层邻居
+
+        # 记录关系使用情况（如果启用）
+        if self.track_relation_distribution:
+            self._update_relation_counter(relations)
 
         item_embeddings = self._aggregate(user_embeddings, entities, relations)  # 单层加权求和
 
@@ -194,6 +266,57 @@ class KGCN(torch.nn.Module):
             entity_vectors = entity_vectors_next_iter
 
         return entity_vectors[0].reshape((self.batch_size, self.dim))
+
+    def _update_relation_counter(self, relations):
+        '''
+        更新关系计数器，记录训练过程中使用的各种关系
+        relations: 列表，每个元素是 [batch_size, -1] 形状的 LongTensor，包含关系 ID
+        '''
+        with torch.no_grad():
+            # 遍历所有层的关系
+            for relation_tensor in relations:
+                # relation_tensor 形状: [batch_size, -1]
+                # 展平并转换为 CPU
+                relation_ids = relation_tensor.flatten().cpu()
+                # 统计每个关系 ID 的出现次数
+                unique_ids, counts = torch.unique(relation_ids, return_counts=True)
+                # 更新计数器（使用索引更新，避免越界）
+                valid_mask = unique_ids < self.num_rel
+                if valid_mask.any():
+                    valid_ids = unique_ids[valid_mask]
+                    valid_counts = counts[valid_mask]
+                    self.relation_counter[valid_ids] += valid_counts
+
+    def get_relation_distribution(self):
+        '''
+        获取关系分布（未归一化的频率统计）
+        返回一个字典，key 为关系 ID，value 为使用频率
+        '''
+        distribution_dict = {}
+        for rel_id in range(self.num_rel):
+            if self.relation_counter[rel_id].item() > 0:
+                distribution_dict[rel_id] = self.relation_counter[rel_id].item()
+        return distribution_dict
+
+    def get_normalized_relation_distribution(self):
+        '''
+        获取归一化的关系分布（概率分布，所有值之和为1）
+        返回: torch.Tensor of shape [num_rel]，每个元素表示该关系的使用概率
+        '''
+        total_count = self.relation_counter.sum().item()
+        if total_count == 0:
+            # 如果没有记录任何关系，返回均匀分布
+            return torch.ones(self.num_rel, dtype=torch.float32) / self.num_rel
+        
+        # 归一化为概率分布
+        distribution = self.relation_counter.float() / total_count
+        return distribution
+
+    def reset_relation_counter(self):
+        '''
+        重置关系计数器（用于新的训练轮次或评估）
+        '''
+        self.relation_counter.zero_()
 
     def request_neighbors(self, user_id, item_id):
         with torch.no_grad():
@@ -326,7 +449,18 @@ class KGCN_E(torch.nn.Module):
         self.n_neighbor = args.neighbor_sample_size  # 采样邻居个数
         self.kg = kg
         self.device = device
-        self.aggregator = Aggregator(self.batch_size, self.dim, args.aggregator)  # 相加然后过线性层
+        # 从 args 中读取关系注意力相关参数，如果不存在则使用默认值
+        use_relation_attention = getattr(args, 'use_relation_attention', True)
+        relation_attention_alpha = getattr(args, 'relation_attention_alpha', 0.5)
+        relation_attention_type = getattr(args, 'relation_attention_type', 'mlp')
+        self.aggregator = Aggregator(
+            self.batch_size, 
+            self.dim, 
+            args.aggregator,
+            use_relation_attention=use_relation_attention,
+            relation_attention_alpha=relation_attention_alpha,
+            relation_attention_type=relation_attention_type
+        )  # 相加然后过线性层
         self._gen_adj()  # 对KG中的每一个head,固定采样n_neighbor个邻居节点和关系
         self.init = torch.nn.init.xavier_normal_
 
@@ -338,6 +472,11 @@ class KGCN_E(torch.nn.Module):
         self.init(self.rel.weight)
 
         self.trained = defaultdict(list)
+        
+        # 关系分布统计相关初始化
+        # 使用 torch.zeros 在 CPU 上维护关系计数器，避免影响 GPU 训练
+        self.relation_counter = torch.zeros(num_rel, dtype=torch.long)
+        self.track_relation_distribution = getattr(args, 'track_relation_distribution', True)
 
     def _gen_adj(self):
         '''
@@ -378,6 +517,10 @@ class KGCN_E(torch.nn.Module):
         user_embeddings = self.usr(u).squeeze(dim=1)
         if entities == None and relations == None:
             entities, relations = self._get_neighbors(v)  # 对每一个user-item的item,取item的n_iter层邻居
+
+        # 记录关系使用情况（如果启用）
+        if self.track_relation_distribution:
+            self._update_relation_counter(relations)
 
         item_embeddings = self._aggregate(user_embeddings, entities, relations)  # 单层加权求和
 
@@ -428,6 +571,57 @@ class KGCN_E(torch.nn.Module):
             entity_vectors = entity_vectors_next_iter
 
         return entity_vectors[0].reshape((self.batch_size, self.dim))
+
+    def _update_relation_counter(self, relations):
+        '''
+        更新关系计数器，记录训练过程中使用的各种关系
+        relations: 列表，每个元素是 [batch_size, -1] 形状的 LongTensor，包含关系 ID
+        '''
+        with torch.no_grad():
+            # 遍历所有层的关系
+            for relation_tensor in relations:
+                # relation_tensor 形状: [batch_size, -1]
+                # 展平并转换为 CPU
+                relation_ids = relation_tensor.flatten().cpu()
+                # 统计每个关系 ID 的出现次数
+                unique_ids, counts = torch.unique(relation_ids, return_counts=True)
+                # 更新计数器（使用索引更新，避免越界）
+                valid_mask = unique_ids < self.num_rel
+                if valid_mask.any():
+                    valid_ids = unique_ids[valid_mask]
+                    valid_counts = counts[valid_mask]
+                    self.relation_counter[valid_ids] += valid_counts
+
+    def get_relation_distribution(self):
+        '''
+        获取关系分布（未归一化的频率统计）
+        返回一个字典，key 为关系 ID，value 为使用频率
+        '''
+        distribution_dict = {}
+        for rel_id in range(self.num_rel):
+            if self.relation_counter[rel_id].item() > 0:
+                distribution_dict[rel_id] = self.relation_counter[rel_id].item()
+        return distribution_dict
+
+    def get_normalized_relation_distribution(self):
+        '''
+        获取归一化的关系分布（概率分布，所有值之和为1）
+        返回: torch.Tensor of shape [num_rel]，每个元素表示该关系的使用概率
+        '''
+        total_count = self.relation_counter.sum().item()
+        if total_count == 0:
+            # 如果没有记录任何关系，返回均匀分布
+            return torch.ones(self.num_rel, dtype=torch.float32) / self.num_rel
+        
+        # 归一化为概率分布
+        distribution = self.relation_counter.float() / total_count
+        return distribution
+
+    def reset_relation_counter(self):
+        '''
+        重置关系计数器（用于新的训练轮次或评估）
+        '''
+        self.relation_counter.zero_()
 
     def request_neighbors(self, user_id, item_id):
         with torch.no_grad():
@@ -795,7 +989,15 @@ class KGCN_aggregator(torch.nn.Module):
         self.dim = dim
         self.n_neighbor = n_neighbor
         self.n_iter = n_iter
-        self.aggregator = Aggregator(batch_size, dim, aggregator)
+        # KGCN_aggregator 使用默认的关系注意力参数
+        self.aggregator = Aggregator(
+            batch_size, 
+            dim, 
+            aggregator,
+            use_relation_attention=True,
+            relation_attention_alpha=0.5,
+            relation_attention_type='mlp'
+        )
 
     def forward(self, usr_id, usr_embed, ent_id, ent_embed, rel_id, rel_embed):
         # 梯度追踪，设置输入的实体嵌入、关系嵌入和用户嵌入为可计算梯度状态
