@@ -11,6 +11,7 @@ import torch
 # import pcode.aggregation.swa_knowledge_transfer as swa_knowledge_transfer
 import pcode.datasets.partition_data as partition_data
 import pcode.datasets.prepare_data as prepare_data
+import pcode.aggregation.fedavg as fedavg
 
 
 class Aggregator(object):
