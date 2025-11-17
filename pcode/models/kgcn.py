@@ -303,14 +303,23 @@ class KGCN(torch.nn.Module):
         获取归一化的关系分布（概率分布，所有值之和为1）
         返回: torch.Tensor of shape [num_rel]，每个元素表示该关系的使用概率
         '''
-        total_count = self.relation_counter.sum().item()
-        if total_count == 0:
-            # 如果没有记录任何关系，返回均匀分布
+        # 确保 relation_counter 存在且已初始化
+        if not hasattr(self, 'relation_counter') or self.relation_counter is None:
+            # 如果还没有初始化，返回均匀分布（在 CPU 上）
             return torch.ones(self.num_rel, dtype=torch.float32) / self.num_rel
         
-        # 归一化为概率分布
-        distribution = self.relation_counter.float() / total_count
-        return distribution
+        try:
+            total_count = self.relation_counter.sum().item()
+            if total_count == 0:
+                # 如果没有记录任何关系，返回均匀分布（在 CPU 上）
+                return torch.ones(self.num_rel, dtype=torch.float32) / self.num_rel
+            
+            # 归一化为概率分布，确保在 CPU 上
+            distribution = self.relation_counter.float() / total_count
+            return distribution.cpu() if distribution.is_cuda else distribution
+        except Exception as e:
+            # 如果出现任何错误，返回均匀分布
+            return torch.ones(self.num_rel, dtype=torch.float32) / self.num_rel
 
     def reset_relation_counter(self):
         '''
@@ -608,14 +617,23 @@ class KGCN_E(torch.nn.Module):
         获取归一化的关系分布（概率分布，所有值之和为1）
         返回: torch.Tensor of shape [num_rel]，每个元素表示该关系的使用概率
         '''
-        total_count = self.relation_counter.sum().item()
-        if total_count == 0:
-            # 如果没有记录任何关系，返回均匀分布
+        # 确保 relation_counter 存在且已初始化
+        if not hasattr(self, 'relation_counter') or self.relation_counter is None:
+            # 如果还没有初始化，返回均匀分布（在 CPU 上）
             return torch.ones(self.num_rel, dtype=torch.float32) / self.num_rel
         
-        # 归一化为概率分布
-        distribution = self.relation_counter.float() / total_count
-        return distribution
+        try:
+            total_count = self.relation_counter.sum().item()
+            if total_count == 0:
+                # 如果没有记录任何关系，返回均匀分布（在 CPU 上）
+                return torch.ones(self.num_rel, dtype=torch.float32) / self.num_rel
+            
+            # 归一化为概率分布，确保在 CPU 上
+            distribution = self.relation_counter.float() / total_count
+            return distribution.cpu() if distribution.is_cuda else distribution
+        except Exception as e:
+            # 如果出现任何错误，返回均匀分布
+            return torch.ones(self.num_rel, dtype=torch.float32) / self.num_rel
 
     def reset_relation_counter(self):
         '''
