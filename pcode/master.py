@@ -462,6 +462,7 @@ class Master(object):
         if not hasattr(self, 'optimizer'):
             self.optimizer = torch.optim.Adam(self.master_model.parameters(), lr=self.conf.lr,
                                               weight_decay=self.conf.weight_decay)
+        eval_model_for_perf = None
         if same_arch:
             # TODO: 如何处理grad
             # 打印参数更新前的状态
@@ -473,6 +474,8 @@ class Master(object):
             #     print (f"After optimizer step - Param {i}: Value mean: {param.data.mean ()}")
             self.optimizer.zero_grad(set_to_none=False)# 清空梯度
             fedavg_model = copy.deepcopy(self.master_model.aggregator) #深拷贝主模型的聚合器
+            # 评估时需要完整的 master_model
+            eval_model_for_perf = copy.deepcopy(self.master_model)
             fedavg_models = {'kgcn_aggregate': fedavg_model}
             # fedavg_model = list(fedavg_models.values())[0]
         else:
@@ -484,15 +487,18 @@ class Master(object):
         if self.aggregator.aggregate_fn is not None:
             # evaluate the uniformly averaged model.
             if fedavg_model is not None:
+                # 使用完整的 master_model 进行验证，避免直接调用 aggregator 导致 forward 参数不匹配
+                eval_model = copy.deepcopy(eval_model_for_perf) if eval_model_for_perf is not None else copy.deepcopy(self.master_model)
                 performance = master_utils.get_avg_perf_on_dataloaders(
                     self.conf,
                     self.coordinator,
-                    fedavg_model,
+                    eval_model,
                     self.criterion,
                     self.metrics,
                     self.test_loaders,
                     label=f"fedag_test_loader",
                 )
+                del eval_model
             else:
                 assert "knowledge_transfer" in self.conf.fl_aggregate["scheme"]
 
