@@ -17,7 +17,22 @@ def inference(
 ):
     """Inference on the given model and get loss and accuracy."""
     # do the forward pass and get the output.
-    output = model(data_batch["input"])
+    # 对于 KGCN_aggregator 模型，需要特殊处理输入格式
+    if hasattr(model, '__class__') and 'KGCN_aggregator' in model.__class__.__name__:
+        # KGCN_aggregator 的 forward 需要 6 个参数：usr_id, usr_embed, ent_id, ent_embed, rel_id, rel_embed
+        # data_batch["input"] 应该是一个包含这些参数的列表或元组
+        if isinstance(data_batch["input"], (list, tuple)) and len(data_batch["input"]) >= 5:
+            # 第一个参数是 usr_id，通常为 None
+            output = model(None, *data_batch["input"])
+        else:
+            # 如果格式不对，尝试直接调用
+            output = model(data_batch["input"])
+    elif hasattr(model, '__class__') and 'KGCN' in model.__class__.__name__:
+        # 对于其他 KGCN 模型（如 KGCN, KGCN_E, KGCN_kg），直接使用 data_batch["input"]
+        output = model(data_batch["input"])
+    else:
+        # 对于其他模型，使用标准调用方式
+        output = model(data_batch["input"])
 
     # evaluate the output and get the loss, performance.
     if conf.use_mixup and is_training:
