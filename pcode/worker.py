@@ -261,10 +261,24 @@ class Worker(object):
                 self.input[4].grad.detach().cpu(),
             ]
 
+            # 获取关系分布信息（如果模型支持）
+            relation_distribution = None
+            if hasattr(self.model, 'get_normalized_relation_distribution'):
+                try:
+                    relation_distribution = self.model.get_normalized_relation_distribution().cpu()
+                except Exception as e:
+                    if getattr(self.conf, "logger", None) is not None:
+                        self.conf.logger.log(f"Warning: Failed to get relation distribution: {e}")
+                    relation_distribution = None
+
+            # metadata: [client_id, grad_count, has_relation_distribution]
+            has_relation_dist = 1 if relation_distribution is not None else 0
             metadata = torch.tensor(
-                [self.conf.graph.client_id, len(model_grads)], dtype=torch.long
+                [self.conf.graph.client_id, len(model_grads), has_relation_dist], dtype=torch.long
             )
             payload = [metadata] + model_grads + embeddings_grad
+            if relation_distribution is not None:
+                payload.append(relation_distribution)
 
             if getattr(self.conf, "logger", None) is not None:
                 try:

@@ -390,16 +390,23 @@ class Master(object):
             metadata = tensors[0].to(torch.long).cpu()
             recv_client_id = int(metadata[0].item())
             grad_count = int(metadata[1].item())
+            has_relation_dist = int(metadata[2].item()) if len(metadata) > 2 else 0
 
             if recv_client_id == -1:
                 continue
 
             model_grads = tensors[1:1 + grad_count]
-            embeddings_grad = tensors[1 + grad_count:]
+            embeddings_grad = tensors[1 + grad_count:1 + grad_count + 3]  # 3个embedding梯度
+            
+            # 提取关系分布（如果存在）
+            relation_distribution = None
+            if has_relation_dist == 1 and len(tensors) > 1 + grad_count + 3:
+                relation_distribution = tensors[1 + grad_count + 3]
 
             flatten_local_models[recv_client_id] = {
                 'model_grad': model_grads,
                 'embeddings_grad': embeddings_grad,
+                'relation_distribution': relation_distribution,  # 存储关系分布
             }
 
         self.conf.logger.log(f"Master received all local models.")

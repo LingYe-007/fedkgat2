@@ -7,6 +7,7 @@ import torch.nn.functional as F
 import pcode.aggregation.utils as agg_utils
 import pcode.master_utils as master_utils
 from pcode.utils.module_state import ModuleState
+from pcode.utils.tensor_buffer import TensorBuffer
 
 
 def compute_relation_similarity(relation_dist1, relation_dist2, similarity_method='kl_divergence'):
@@ -110,36 +111,64 @@ def _fedavg_kgcn(clientid2arch, n_selected_clients, flatten_local_models, client
         _arch = clientid2arch[client_idx]
         _model = copy.deepcopy(client_models[_arch])
         _model_state_dict = client_models[_arch].state_dict()
-        flatten_local_model.unpack(_model_state_dict.values())
+        
+        # 处理两种格式：字典或 TensorBuffer
+        if isinstance(flatten_local_model, dict) and 'model_grad' in flatten_local_model:
+            # 如果是字典格式，从 model_grad 创建 TensorBuffer
+            model_grads = flatten_local_model['model_grad']
+            tensor_buffer = TensorBuffer(model_grads, device=torch.device('cpu'))
+            tensor_buffer.unpack(_model_state_dict.values())
+        else:
+            # 如果是 TensorBuffer 格式，直接使用
+            flatten_local_model.unpack(_model_state_dict.values())
+        
         _model.load_state_dict(_model_state_dict)
         local_models[client_idx] = _model
 
     # 计算聚合权重
     if use_relation_adaptive:
-        # 尝试从每个客户端模型中提取关系分布
+        # 尝试从每个客户端获取关系分布
+        # 优先使用从通信中接收的关系分布，否则从模型中提取
         relation_dists = {}
         client_ids = list(local_models.keys())
         
         for client_idx in client_ids:
-            model = local_models[client_idx]
-            # 检查模型是否有 get_normalized_relation_distribution 方法
-            if hasattr(model, 'get_normalized_relation_distribution'):
-                try:
-                    relation_dist = model.get_normalized_relation_distribution()
-                    relation_dists[client_idx] = relation_dist
-                    # 记录客户端的关系分布（可选，仅记录非零值）
-                    if conf and hasattr(conf, 'logger'):
-                        non_zero_indices = (relation_dist > 1e-6).nonzero(as_tuple=True)[0]
-                        if len(non_zero_indices) <= 20:  # 只记录前20个非零关系
-                            dist_summary = {idx.item(): relation_dist[idx].item() 
-                                          for idx in non_zero_indices}
-                            conf.logger.log(f"  Client {client_idx} relation distribution (top relations): {dist_summary}")
-                except Exception as e:
-                    if conf and hasattr(conf, 'logger'):
-                        conf.logger.log(f"Warning: Failed to get relation distribution for client {client_idx}: {e}")
+            relation_dist = None
+            
+            # 方法1: 从 flatten_local_models 字典中获取关系分布（如果存在）
+            if client_idx in flatten_local_models:
+                flatten_local_model = flatten_local_models[client_idx]
+                if isinstance(flatten_local_model, dict) and 'relation_distribution' in flatten_local_model:
+                    relation_dist = flatten_local_model['relation_distribution']
+                    if relation_dist is not None:
+                        relation_dists[client_idx] = relation_dist
+                        if conf and hasattr(conf, 'logger'):
+                            non_zero_indices = (relation_dist > 1e-6).nonzero(as_tuple=True)[0]
+                            if len(non_zero_indices) <= 20:
+                                dist_summary = {idx.item(): relation_dist[idx].item() 
+                                              for idx in non_zero_indices}
+                                conf.logger.log(f"  Client {client_idx} relation distribution (from communication, top relations): {dist_summary}")
+            
+            # 方法2: 如果方法1失败，尝试从模型中提取
+            if client_idx not in relation_dists or relation_dists[client_idx] is None:
+                model = local_models[client_idx]
+                if hasattr(model, 'get_normalized_relation_distribution'):
+                    try:
+                        relation_dist = model.get_normalized_relation_distribution()
+                        relation_dists[client_idx] = relation_dist
+                        # 记录客户端的关系分布（可选，仅记录非零值）
+                        if conf and hasattr(conf, 'logger'):
+                            non_zero_indices = (relation_dist > 1e-6).nonzero(as_tuple=True)[0]
+                            if len(non_zero_indices) <= 20:  # 只记录前20个非零关系
+                                dist_summary = {idx.item(): relation_dist[idx].item() 
+                                              for idx in non_zero_indices}
+                                conf.logger.log(f"  Client {client_idx} relation distribution (from model, top relations): {dist_summary}")
+                    except Exception as e:
+                        if conf and hasattr(conf, 'logger'):
+                            conf.logger.log(f"Warning: Failed to get relation distribution for client {client_idx}: {e}")
+                        relation_dists[client_idx] = None
+                else:
                     relation_dists[client_idx] = None
-            else:
-                relation_dists[client_idx] = None
         
         # 检查是否所有客户端都有关系分布
         valid_dists = {k: v for k, v in relation_dists.items() if v is not None}
