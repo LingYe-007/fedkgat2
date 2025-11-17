@@ -321,13 +321,17 @@ def fedavg_kgcn(
     if isinstance(temperature, dict):
         temperature = temperature.get('temperature', 1.0)
     
+    # 获取架构信息，用于返回字典格式
+    # 假设所有客户端使用相同的架构（same_arch=True）
+    arch = list(clientid2arch.values())[0] if clientid2arch else list(client_models.keys())[0]
+    
     if (
             "server_teaching_scheme" not in conf.fl_aggregate
             or "drop" not in conf.fl_aggregate["server_teaching_scheme"]
     ):
         # directly averaging.
         conf.logger.log(f"No indices to be removed.")
-        return _fedavg_kgcn(
+        aggregated_model = _fedavg_kgcn(
             clientid2arch, 
             n_selected_clients, 
             flatten_local_models, 
@@ -337,6 +341,8 @@ def fedavg_kgcn(
             similarity_method=similarity_method,
             temperature=temperature
         )
+        # 返回字典格式，与 master.py 期望的格式一致
+        return {arch: aggregated_model}
     else:
         # we will first perform the evaluation.
         # recover the models on the computation device.
@@ -371,7 +377,7 @@ def fedavg_kgcn(
         )
         for index in indices_to_remove[::-1]:
             flatten_local_models.pop(relationship[index])
-        return _fedavg_kgcn(
+        aggregated_model = _fedavg_kgcn(
             clientid2arch,
             n_selected_clients - len(indices_to_remove),
             flatten_local_models,
@@ -381,6 +387,8 @@ def fedavg_kgcn(
             similarity_method=similarity_method,
             temperature=temperature
         )
+        # 返回字典格式，与 master.py 期望的格式一致
+        return {arch: aggregated_model}
 
 
 def validate(conf, model, data_loader, criterion, metrics):
