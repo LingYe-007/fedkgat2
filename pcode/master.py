@@ -298,13 +298,14 @@ class Master(object):
         # 将参与训练的客户端分配给
         client_ids = []
         local_n_epochs = []
-        #  self.conf.workers进程总数
-        if self.conf.n_participated % self.conf.workers:
-            selected_client_ids += [-1] * (self.conf.workers - self.conf.n_participated % self.conf.workers)
-            list_of_local_n_epochs += [-1] * (self.conf.workers - self.conf.n_participated % self.conf.workers)
-        for i in range(0, self.conf.n_participated, self.conf.workers):
-            client_ids.append(selected_client_ids[i:i + self.conf.workers])
-            local_n_epochs.append(list_of_local_n_epochs[i:i + self.conf.workers])
+        #  self.conf.workers进程总数，确保是整数类型
+        workers = int(self.conf.workers) if isinstance(self.conf.workers, (str, int)) else self.conf.workers
+        if self.conf.n_participated % workers:
+            selected_client_ids += [-1] * (workers - self.conf.n_participated % workers)
+            list_of_local_n_epochs += [-1] * (workers - self.conf.n_participated % workers)
+        for i in range(0, self.conf.n_participated, workers):
+            client_ids.append(selected_client_ids[i:i + workers])
+            local_n_epochs.append(list_of_local_n_epochs[i:i + workers])
 
         return client_ids, local_n_epochs
 
@@ -540,10 +541,14 @@ class Master(object):
 
     def _evaluate(self):
         # 每隔validation_interval轮，验证一次模型性能，保存最佳性能
-        if self.conf.graph.comm_round % self.conf.validation_interval == 0:
+        # 确保 validation_interval 是整数类型
+        validation_interval = int(self.conf.validation_interval) if isinstance(self.conf.validation_interval, (str, int)) else self.conf.validation_interval
+        if self.conf.graph.comm_round % validation_interval == 0:
             self._validation()
         # 每隔topk_eval_interval轮，评估一次性能
-        if self.conf.graph.comm_round % self.conf.topk_eval_interval == 0:
+        # 确保 topk_eval_interval 是整数类型
+        topk_eval_interval = int(self.conf.topk_eval_interval) if isinstance(self.conf.topk_eval_interval, (str, int)) else self.conf.topk_eval_interval
+        if self.conf.graph.comm_round % topk_eval_interval == 0:
             try:
                 self.topk_eval.eval(self.master_model, self.last_comm_round)
             except Exception as exc:

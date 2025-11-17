@@ -39,6 +39,9 @@ class Aggregator(object):
         ):
             # 就是federated_average
             self.aggregate_fn = None
+        elif self.conf.fl_aggregate["scheme"] == "federated_average_kgcn":
+            # 使用 KGCN 专用的联邦平均聚合（支持关系自适应聚合）
+            self.aggregate_fn = self._s3_federated_average_kgcn()
         elif self.conf.fl_aggregate["scheme"] == "noise_knowledge_transfer":
             # i.e. FedDF
             self.aggregate_fn = self._s7_noise_knowledge_transfer()

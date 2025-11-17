@@ -136,7 +136,9 @@ if __name__ == "__main__":
 
     # Create process for each worker and master.
     # number of data loading workers (default: 4)
-    size = conf.workers + 1
+    # 确保 workers 是整数类型
+    workers = int(conf.workers) if isinstance(conf.workers, (str, int)) else conf.workers
+    size = workers + 1
 
     # torch.multiprocessing.set_start_method("spawn")是PyTorch中的一个函数，用于设置多进程的启动方法。
     # "spawn"是一种启动方法，它创建一个新的Python解释器进程来执行子任务。
